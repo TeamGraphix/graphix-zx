@@ -1,5 +1,9 @@
-"""Demonstration of non-Unitary pattern compilation."""
+"""
+Non-Unitary pattern compilation
+===============================
 
+Demonstration of non-Unitary pattern compilation.
+"""
 from graphix_zx.common import Plane, PlannerMeasBasis
 from graphix_zx.graphstate import GraphState
 from graphix_zx.pattern import print_pattern

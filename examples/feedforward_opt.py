@@ -1,5 +1,9 @@
-"""Demonstration of feedforward optimization."""
+"""
+Feedforward optimization
+========================
 
+Demonstration of feedforward optimization.
+"""
 # %%
 import numpy as np
 

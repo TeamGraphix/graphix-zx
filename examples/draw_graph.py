@@ -1,5 +1,9 @@
-"""Simple example to draw a GraphState in graphix-zx."""
+"""
+Draw a GraphState
+=================
 
+Simple example to draw a GraphState in graphix-zx.
+"""
 # %%
 from graphix_zx.flow import construct_dag
 from graphix_zx.random_objects import get_random_flow_graph
