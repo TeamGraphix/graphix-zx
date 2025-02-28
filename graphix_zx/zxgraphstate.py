@@ -30,7 +30,7 @@ class ZXGraphState(GraphState):
         set of output nodes
     physical_nodes : set[int]
         set of physical nodes
-    physical_edges : dict[int, set[int]]
+    physical_edges : set[tuple[int]]
         physical edges
     meas_bases : dict[int, MeasBasis]
     q_indices : dict[int, int]
@@ -509,3 +509,124 @@ class ZXGraphState(GraphState):
             ]
             for action_func, check_func in steps:
                 self._remove_cliffords(action_func, check_func, atol)
+
+    def _extract_yz_adjacent_pair(self) -> tuple[int, int] | None:
+        """Call inside convert_to_phase_gadget.
+
+        Find a pair of adjacent nodes that are both measured in the YZ-plane.
+
+        Returns
+        -------
+        tuple[int, int] | None
+            A pair of adjacent nodes that are both measured in the YZ-plane, or None if no such pair exists.
+        """
+        yz_nodes = {node for node, basis in self.meas_bases.items() if basis.plane == Plane.YZ}
+        for u in yz_nodes:
+            for v in self.get_neighbors(u):
+                if v in yz_nodes:
+                    return (min(u, v), max(u, v))
+        return None
+
+    def _extract_xz_node(self) -> int | None:
+        """Call inside convert_to_phase_gadget.
+
+        Find a node that is measured in the XZ-plane.
+
+        Returns
+        -------
+        int | None
+            A node that is measured in the XZ-plane, or None if no such node exists.
+        """
+        for node, basis in self.meas_bases.items():
+            if basis.plane == Plane.XZ:
+                return node
+        return None
+
+    def convert_to_phase_gadget(self) -> None:
+        """Convert a ZX-diagram with gflow in MBQC+LC form into its phase-gadget form while preserving gflow."""
+        while True:
+            if pair := self._extract_yz_adjacent_pair():
+                self.pivot(*pair)
+                del pair
+                continue
+            if u := self._extract_xz_node():
+                self.local_complement(u)
+                del u
+                continue
+            break
+
+    def merge_yz_to_xy(self) -> None:
+        """Merge YZ-measured nodes that have only one neighbor with an XY-measured node.
+
+        If a node u is measured in the YZ-plane and u has only one neighbor v with a XY-measurement,
+        then the node u can be merged into the node v.
+        """
+        target_candidates = {
+            u
+            for u, basis in self.meas_bases.items()
+            if (basis.plane == Plane.YZ and len(self.get_neighbors(u)) == 1 and (u not in self.output_nodes))
+        }
+        target_nodes = {
+            u
+            for u in target_candidates
+            if any(self.meas_bases[v].plane == Plane.XY for v in self.get_neighbors(u) - self.output_nodes)
+        }
+        for u in target_nodes:
+            v = self.get_neighbors(u).pop()
+            new_angle = (self.meas_bases[u].angle + self.meas_bases[v].angle) % (2.0 * np.pi)
+            self.set_meas_basis(v, PlannerMeasBasis(Plane.XY, new_angle))
+            self.remove_physical_node(u)
+
+    def merge_yz_nodes(self) -> None:
+        """Merge isolated YZ-measured nodes into a single node.
+
+        If u, v nodes are measured in the YZ-plane and u, v have the same neighbors,
+        then u, v can be merged into a single node.
+        """
+        min_yz_nodes = 2
+        while True:
+            yz_nodes = {u for u, basis in self.meas_bases.items() if basis.plane == Plane.YZ}
+            if len(yz_nodes) < min_yz_nodes:
+                break
+            merged = False
+            for u in sorted(yz_nodes):
+                for v in sorted(yz_nodes - {u}):
+                    if self.get_neighbors(u) != self.get_neighbors(v):
+                        continue
+
+                    new_angle = (self.meas_bases[u].angle + self.meas_bases[v].angle) % (2.0 * np.pi)
+                    self.set_meas_basis(u, PlannerMeasBasis(Plane.YZ, new_angle))
+                    self.remove_physical_node(v)
+
+                    merged = True
+                    break
+                if merged:
+                    break
+            if not merged:
+                break
+
+    def prune_non_cliffords(self, atol: float = 1e-9) -> None:
+        """Prune non-Clifford vertices from the graph state.
+
+        Repeat the following steps until there are no non-Clifford vertices:
+            1. remove_cliffords
+            2. convert_to_phase_gadget
+            3. merge_yz_to_xy
+            4. merge_yz_nodes
+            5. if there are some removable Clifford vertices, back to step 1.
+
+        Parameters
+        ----------
+        atol : float, optional
+            absolute tolerance, by default 1e-9
+        """
+        while True:
+            self.remove_cliffords(atol)
+            self.convert_to_phase_gadget()
+            self.merge_yz_to_xy()
+            self.merge_yz_nodes()
+            if not any(
+                is_clifford_angle(self.meas_bases[node].angle, atol) and self.is_removable_clifford(node, atol)
+                for node in self.physical_nodes - self.input_nodes - self.output_nodes
+            ):
+                break
