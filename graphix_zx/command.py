@@ -36,6 +36,9 @@ class N:
 
     node: int
 
+    def __str__(self) -> str:
+        return f"N, node={self.node}"
+
 
 @dataclasses.dataclass
 class E:
@@ -48,6 +51,9 @@ class E:
     """
 
     nodes: tuple[int, int]
+
+    def __str__(self) -> str:
+        return f"E, nodes={self.nodes}"
 
 
 @dataclasses.dataclass
@@ -62,20 +68,28 @@ class M:
         The measurement basis.
     s_cbit : `int`
         The index of s_domain control classical bit.
+        Default is -1, meaning the flag is always False.
     t_cbit : `int`
         The index of t_domain control classical bit.
+        Default is -1, meaning the flag is always False.
     """
 
     node: int
     meas_basis: MeasBasis
-    s_cbit: int
-    t_cbit: int
+    s_cbit: int = -1
+    t_cbit: int = -1
+
+    def __str__(self) -> str:
+        return (
+            f"M, node={self.node}, plane={self.meas_basis.plane}, "
+            f"angle={self.meas_basis.angle}, s_cbit={self.s_cbit}, t_cbit={self.t_cbit}"
+        )
 
 
 @dataclasses.dataclass
 class _Correction:
     node: int
-    cbit: int
+    cbit: int = -1
 
 
 @dataclasses.dataclass
@@ -88,7 +102,11 @@ class X(_Correction):
         The node index to apply the correction.
     cbit : `int`
         The index of the classical bit to control the correction.
+        If cbit is -1, the flag is always False, meaning the correction will not be applied.
     """
+
+    def __str__(self) -> str:
+        return f"X, node={self.node}, cbit={self.cbit}"
 
 
 @dataclasses.dataclass
@@ -101,7 +119,11 @@ class Z(_Correction):
         The node index to apply the correction.
     cbit : `int`
         The index of the classical bit to control the correction.
+        If cbit is -1, the flag is always False, meaning the correction will not be applied.
     """
+
+    def __str__(self) -> str:
+        return f"Z, node={self.node}, cbit={self.cbit}"
 
 
 @dataclasses.dataclass
@@ -119,6 +141,12 @@ class Clifford:
     node: int
     local_clifford: LocalClifford
 
+    def __str__(self) -> str:
+        return (
+            f"Clifford, node={self.node}, alpha={self.local_clifford.alpha}, "
+            f"beta={self.local_clifford.beta}, gamma={self.local_clifford.gamma}"
+        )
+
 
 @dataclasses.dataclass
 class D:
@@ -126,17 +154,20 @@ class D:
 
     Attributes
     ----------
-    input_cbits : `dict`\[`int`, `bool`\]
-        A dictionary mapping classical bit indices to their boolean values.
+    input_cbits : `list`\[`int`\]
+        A list of classical bit indices that will serve as input to the decoder.
     output_cbits : `list`\[`int`\]
         A list of classical bit indices that will store the decoding results.
     decoder : `BaseDecoder`
         The decoder instance used to process the input classical bits and produce the output.
     """
 
-    input_cbits: dict[int, bool]
+    input_cbits: list[int]
     output_cbits: list[int]
     decoder: BaseDecoder
+
+    def __str__(self) -> str:
+        return f"D, input_cbits={self.input_cbits}, output_cbits={self.output_cbits}, decoder={self.decoder}"
 
 
 if sys.version_info >= (3, 10):
