@@ -10,8 +10,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from collections.abc import Set as AbstractSet
+
+    from graphix_zx.graphstate import BaseGraphState
 
 
 class PauliFrame:
@@ -19,7 +21,7 @@ class PauliFrame:
 
     Attributes
     ----------
-    nodes : `set`\[`int`\]
+    graphstate : `BaseGraphState`
         Set of nodes in the resource graph
     xflow : `dict`\[`int`, `set`\[`int`\]
         X correction flow for each measurement flip
@@ -31,23 +33,38 @@ class PauliFrame:
         Current Z Pauli state for each node
     """
 
-    nodes: set[int]
+    graphstate: BaseGraphState
     xflow: dict[int, set[int]]
     zflow: dict[int, set[int]]
     x_pauli: dict[int, bool]
     z_pauli: dict[int, bool]
+    x_parity_check_group: list[set[int]]
+    z_parity_check_group: list[set[int]]
 
     def __init__(
         self,
-        nodes: AbstractSet[int],
+        graphstate: BaseGraphState,
         xflow: Mapping[int, AbstractSet[int]],
         zflow: Mapping[int, AbstractSet[int]],
+        x_parity_check_group: Sequence[AbstractSet[int]] | None = None,
+        z_parity_check_group: Sequence[AbstractSet[int]] | None = None,
     ) -> None:
-        self.nodes = set(nodes)
+        if x_parity_check_group is None:
+            x_parity_check_group = []
+        if z_parity_check_group is None:
+            z_parity_check_group = []
+        self.graphstate = graphstate
         self.xflow = {node: set(targets) for node, targets in xflow.items()}
         self.zflow = {node: set(targets) for node, targets in zflow.items()}
-        self.x_pauli = dict.fromkeys(nodes, False)
-        self.z_pauli = dict.fromkeys(nodes, False)
+        self.x_pauli = dict.fromkeys(graphstate.physical_nodes, False)
+        self.z_pauli = dict.fromkeys(graphstate.physical_nodes, False)
+
+        if not x_parity_check_group:
+            x_parity_check_group = []
+        if not z_parity_check_group:
+            z_parity_check_group = []
+        self.x_parity_check_group = [set(item) for item in x_parity_check_group]
+        self.z_parity_check_group = [set(item) for item in z_parity_check_group]
 
     def x_flip(self, node: int) -> None:
         """Flip the X Pauli mask for the given node.
@@ -96,3 +113,70 @@ class PauliFrame:
             The set of child nodes.
         """
         return (self.xflow.get(node, set()) | self.zflow.get(node, set())) - {node}
+
+    def detector_groups(self) -> tuple[list[set[int]], list[set[int]]]:
+        r"""Get the X and Z parity check groups.
+
+        Returns
+        -------
+        `tuple`\[`list`\[`set`\[`int`\]\], `list`\[`set`\[`int`\]\]\]
+            The X and Z parity check groups.
+        """
+        inv_z_flow: dict[int, set[int]] = {node: set() for node in self.graphstate.physical_nodes}
+        for node, targets in self.zflow.items():
+            for target in targets:
+                inv_z_flow[target].add(node)
+            inv_z_flow[node] -= {node}
+
+        x_groups: list[set[int]] = []
+        z_groups: list[set[int]] = []
+        for syndrome_group in self.x_parity_check_group:
+            mbqc_group: set[int] = set()
+            for node in syndrome_group:
+                mbqc_group ^= _collect_dependent_chain(inv_z_flow, node)
+            x_groups.append(mbqc_group)
+        for syndrome_group in self.z_parity_check_group:
+            mbqc_group = set()
+            for node in syndrome_group:
+                mbqc_group ^= _collect_dependent_chain(inv_z_flow, node)
+            z_groups.append(mbqc_group)
+
+        return x_groups, z_groups
+
+    def logical_observables_group(self, target_nodes: AbstractSet[int]) -> set[int]:
+        r"""Get the logical observables group for the given target nodes.
+
+        Parameters
+        ----------
+        target_nodes : `collections.abc.Set`\[`int`\]
+            The target nodes to get the logical observables group for.
+
+        Returns
+        -------
+        `set`\[`int`\]
+            The logical observables group for the given target nodes.
+        """
+        # NOTE: This logic assumes that all the measurements are X-based.
+        group: set[int] = set()
+        inv_z_flow: dict[int, set[int]] = {node: set() for node in self.graphstate.physical_nodes}
+        for node, targets in self.zflow.items():
+            for target in targets:
+                inv_z_flow[target].add(node)
+            inv_z_flow[node] -= {node}
+        for node in target_nodes:
+            group ^= _collect_dependent_chain(inv_z_flow, node)
+        return group
+
+
+def _collect_dependent_chain(inv_flow: dict[int, set[int]], node: int) -> set[int]:
+    chain: set[int] = set()
+    untracked = {node}
+    tracked: set[int] = set()
+    while untracked:
+        current = untracked.pop()
+        chain ^= {current}
+        for parent in inv_flow.get(current, set()):
+            if parent not in tracked:
+                untracked.add(parent)
+        tracked.add(current)
+    return chain

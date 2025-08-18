@@ -19,17 +19,21 @@ from graphix_zx.pattern import Pattern
 from graphix_zx.pauli_frame import PauliFrame
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from collections.abc import Set as AbstractSet
 
     from graphix_zx.graphstate import BaseGraphState
+    from graphix_zx.scheduler import Scheduler
 
 
-def qompile(
+def qompile(  # noqa: PLR0913
     graph: BaseGraphState,
     xflow: Mapping[int, AbstractSet[int]],
     zflow: Mapping[int, AbstractSet[int]] | None = None,
     *,
+    x_parity_check_group: Sequence[AbstractSet[int]] | None = None,
+    z_parity_check_group: Sequence[AbstractSet[int]] | None = None,
+    scheduler: Scheduler | None = None,
     correct_output: bool = True,
 ) -> Pattern:
     r"""Compile graph state into pattern with x/z correction flows.
@@ -43,6 +47,14 @@ def qompile(
     zflow : `collections.abc.Mapping`\[`int`, `collections.abc.Set`\[`int`\]\] | `None`
         z correction flow
         if `None`, it is generated from xflow by odd neighbors
+    x_parity_check_group : `collections.abc.Sequence`\[`collections.abc.Set`\[`int`\]\] | `None`
+        x parity check group for FTQC
+    z_parity_check_group : `collections.abc.Sequence`\[`collections.abc.Set`\[`int`\]\] | `None`
+        z parity check group for FTQC
+    scheduler : `Scheduler` | `None`, optional
+        scheduler to schedule the graph state preparation and measurements,
+        if `None`, the commands are scheduled in a single slice,
+        by default `None`
     correct_output : `bool`, optional
         whether to correct outputs or not, by default True
 
@@ -64,15 +76,18 @@ def qompile(
         zflow = {node: odd_neighbors(xflow[node], graph) for node in xflow}
     check_flow(graph, xflow, zflow)
 
-    pauli_frame = PauliFrame(graph.physical_nodes, xflow, zflow)
+    pauli_frame = PauliFrame(
+        graph, xflow, zflow, x_parity_check_group=x_parity_check_group, z_parity_check_group=z_parity_check_group
+    )
 
-    return _qompile(graph, pauli_frame, correct_output=correct_output)
+    return _qompile(graph, pauli_frame, scheduler=scheduler, correct_output=correct_output)
 
 
 def _qompile(
     graph: BaseGraphState,
     pauli_frame: PauliFrame,
     *,
+    scheduler: Scheduler | None = None,
     correct_output: bool = True,
 ) -> Pattern:
     """Compile graph state into pattern with a given Pauli frame.
@@ -85,6 +100,10 @@ def _qompile(
         graph state
     pauli_frame : `PauliFrame`
         Pauli frame to track the Pauli state of each node
+    scheduler : `Scheduler` | `None`, optional
+        scheduler to schedule the graph state preparation and measurements,
+        if `None`, the commands are scheduled in a single slice,
+        by default `None`
     correct_output : `bool`, optional
         whether to correct outputs or not, by default True
 
@@ -101,9 +120,23 @@ def _qompile(
     topo_order.reverse()  # children first
 
     commands: list[Command] = []
-    commands.extend(N(node=node) for node in non_input_nodes)
-    commands.extend(E(nodes=edge) for edge in graph.physical_edges)
-    commands.extend(M(node, meas_bases[node]) for node in topo_order if node not in graph.output_node_indices)
+    if not scheduler:
+        commands.extend(N(node=node) for node in non_input_nodes)
+        commands.extend(E(nodes=edge) for edge in graph.physical_edges)
+        commands.extend(M(node, meas_bases[node]) for node in topo_order if node not in graph.output_node_indices)
+    else:
+        schedule = scheduler.get_schedule()
+        prepared_edges: set[tuple[int, int]] = set()
+
+        for time in range(scheduler.num_slices()):
+            prepare_nodes, measure_nodes = schedule[time]
+            commands.extend(N(node) for node in prepare_nodes)
+            for node in measure_nodes:
+                for neighbor in graph.neighbors(node):
+                    if (node, neighbor) not in prepared_edges and (neighbor, node) not in prepared_edges:
+                        commands.append(E(nodes=(node, neighbor)))
+                        prepared_edges.add((node, neighbor))
+            commands.extend(M(node, meas_bases[node]) for node in measure_nodes)
     if correct_output:
         commands.extend(X(node=node) for node in graph.output_node_indices)
         commands.extend(Z(node=node) for node in graph.output_node_indices)
