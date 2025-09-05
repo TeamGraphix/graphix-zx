@@ -168,14 +168,8 @@ class BaseGraphState(ABC):
         """
 
     @abc.abstractmethod
-    def is_canonical_form(self) -> bool:
-        r"""Check if the graph state is in canonical form.
-
-        Returns
-        -------
-        `bool`
-            `True` if the graph state is in canonical form, `False` otherwise.
-        """
+    def check_canonical_form(self) -> None:
+        r"""Check if the graph state is in canonical form."""
 
 
 class GraphState(BaseGraphState):
@@ -438,16 +432,12 @@ class GraphState(BaseGraphState):
         ------
         ValueError
             1. If the node is already registered as an output node.
-            2. If the node has a measurement basis.
-            3. If the invalid q_index specified.
-            4. If the q_index already exists in output qubit indices.
+            2. If the invalid q_index specified.
+            3. If the q_index already exists in output qubit indices.
         """
         self._ensure_node_exists(node)
         if node in self.__output_node_indices:
             msg = "The node is already registered as an output node."
-            raise ValueError(msg)
-        if self.meas_bases.get(node) is not None:
-            msg = "Cannot set output node with measurement basis."
             raise ValueError(msg)
         if q_index >= len(self.input_node_indices):
             msg = "The q_index does not exist in input qubit indices"
@@ -467,16 +457,8 @@ class GraphState(BaseGraphState):
             node index
         meas_basis : `MeasBasis`
             measurement basis
-
-        Raises
-        ------
-        ValueError
-            If the node is an output node.
         """
         self._ensure_node_exists(node)
-        if node in self.output_node_indices:
-            msg = "Cannot set measurement basis for output node."
-            raise ValueError(msg)
         self.__meas_bases[node] = meas_basis
 
     def apply_local_clifford(self, node: int, lc: LocalClifford) -> None:
@@ -520,27 +502,29 @@ class GraphState(BaseGraphState):
         return self.__physical_edges[node].copy()
 
     @typing_extensions.override
-    def is_canonical_form(self) -> bool:
+    def check_canonical_form(self) -> None:
         r"""Check if the graph state is in canonical form.
 
         The definition of canonical form is:
-        1. Graph state has the same number of input and output nodes.
+        1. Graph state has equal number of input and output nodes.
         2. No Clifford operators applied.
-        3. All non-output nodes have measurement basis.
+        3. All non-output nodes have measurement basis (output nodes can have measurement basis as well).
 
-        Returns
-        -------
-        `bool`
-            `True` if the graph state is in canonical form, `False` otherwise.
+        Raises
+        ------
+        ValueError
+            If the graph state is not in canonical form.
         """
         if len(self.input_node_indices) != len(self.output_node_indices):
-            return False
+            msg = "The number of input nodes must be equal to the number of output nodes."
+            raise ValueError(msg)
         if self.__local_cliffords:
-            return False
+            msg = "Clifford operators are applied."
+            raise ValueError(msg)
         for node in self.physical_nodes - set(self.output_node_indices):
             if self.meas_bases.get(node) is None:
-                return False
-        return True
+                msg = "All non-output nodes must have measurement basis."
+                raise ValueError(msg)
 
     def expand_local_cliffords(self) -> ExpansionMaps:
         r"""Expand local Clifford operators applied on the input and output nodes.
@@ -668,6 +652,9 @@ def compose_sequentially(
 ) -> tuple[BaseGraphState, dict[int, int], dict[int, int]]:
     r"""Compose two graph states sequentially.
 
+    NOTE: If the output nodes of graph1 have measurement bases assigned,
+    the measurement bases will be overwritten by the input nodes of graph2.
+
     Parameters
     ----------
     graph1 : `BaseGraphState`
@@ -683,15 +670,10 @@ def compose_sequentially(
     Raises
     ------
     ValueError
-        1. If graph1 or graph2 is not in canonical form.
-        2. If the logical qubit indices of output nodes in graph1 do not match input nodes in graph2.
+        If the logical qubit indices of output nodes in graph1 do not match input nodes in graph2.
     """
-    if not graph1.is_canonical_form():
-        msg = "graph1 must be in canonical form."
-        raise ValueError(msg)
-    if not graph2.is_canonical_form():
-        msg = "graph2 must be in canonical form."
-        raise ValueError(msg)
+    graph1.check_canonical_form()
+    graph2.check_canonical_form()
     if set(graph1.output_node_indices.values()) != set(graph2.input_node_indices.values()):
         msg = "Logical qubit indices of output nodes in graph1 must match input nodes in graph2."
         raise ValueError(msg)
@@ -778,18 +760,9 @@ def compose_in_parallel(  # noqa: C901
     -------
     `tuple`\[`BaseGraphState`, `dict`\[`int`, `int`\], `dict`\[`int`, `int`\]\]
         composed graph state, node map for graph1, node map for graph2
-
-    Raises
-    ------
-    ValueError
-        If graph1 or graph2 is not in canonical form.
     """
-    if not graph1.is_canonical_form():
-        msg = "graph1 must be in canonical form."
-        raise ValueError(msg)
-    if not graph2.is_canonical_form():
-        msg = "graph2 must be in canonical form."
-        raise ValueError(msg)
+    graph1.check_canonical_form()
+    graph2.check_canonical_form()
     node_map1: dict[int, int] = {}
     node_map2: dict[int, int] = {}
     composed_graph = GraphState()
